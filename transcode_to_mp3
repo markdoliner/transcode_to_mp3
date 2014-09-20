@@ -1,0 +1,316 @@
+#!/usr/bin/env python
+
+"""
+A command line program that looks for music files in path(s) given on
+the command line and copies them to the local directory, transcoding
+to mp3 if necessary.
+
+Available at https://github.com/markdoliner/transcode_to_mp3
+
+Licensed as follows (this is the 2-clause BSD license, aka
+"Simplified BSD License" or "FreeBSD License"):
+
+Copyright (c) 2014, Mark Doliner
+All rights reserved.
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+- Redistributions of source code must retain the above copyright notice,
+  this list of conditions and the following disclaimer.
+- Redistributions in binary form must reproduce the above copyright notice,
+  this list of conditions and the following disclaimer in the documentation
+  and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE
+ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE
+LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR
+CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF
+SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS
+INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN
+CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE)
+ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE
+POSSIBILITY OF SUCH DAMAGE.
+"""
+
+import errno
+import multiprocessing
+import os
+import os.path
+import Queue
+import re
+import shutil
+import subprocess
+import sys
+import threading
+
+try:
+    import mutagen
+except ImportError:
+    sys.stderr.write('Error: Could not import mutagen\n'
+            'On Ubuntu: apt-get install python-mutagen\n')
+    sys.exit(1)
+
+try:
+    import psutil
+except ImportError:
+    sys.stderr.write('Error: Could not import psutil\n'
+            'On Ubuntu: apt-get install python-psutil\n')
+    sys.exit(1)
+
+
+_DESIRED_TAGS = [
+    'album',
+    'artist',
+    'date',
+    'discnumber',
+    'performer',
+    'title',
+    'tracknumber'
+]
+
+
+def _get_filesystem_type(path):
+    """Return a short string describing the name of the filesystem type where
+    the given path lives.
+
+    e.x.: vfat
+    e.x.: ext4
+    """
+    path = os.path.abspath(path)
+    matches = []
+
+    # Iterate through all partitions and keep track of potential matches.
+    for partition in psutil.disk_partitions():
+        if path.startswith(partition.mountpoint):
+            matches.append(partition)
+
+    # Return whichever patition has the deepest mount point.
+    longest_matched_partition = max(matches, key=lambda partition: len(partition.mountpoint))
+    return longest_matched_partition.fstype
+
+
+def _makedirs_if_not_exist(path):
+    """Recursively create a given directory if it does not exist."""
+    try:
+        os.makedirs(path)
+    except OSError as exc:
+        if exc.errno == errno.EEXIST and os.path.isdir(path):
+            pass
+        else:
+            raise
+
+
+def _read_tags(source_filename):
+    """Return a dict containing any non-null tags out of the list of
+    _DESIRED_TAGS from the given file.
+
+    Allows mutagen to attempt to guess which type of tags to read.
+    """
+    try:
+        file_info = mutagen.File(source_filename, easy=True)
+    except mutagen.mp3.HeaderNotFoundError as exc:
+        print('Could not find mp3 header in %s: %s' % (source_filename, exc))
+        return {}
+    if not file_info:
+        return {}
+
+    # Copy desired tags from file_info to tags.
+    tags = {}
+    for desired_tag in _DESIRED_TAGS:
+        if desired_tag in file_info:
+            tag = file_info[desired_tag][0]
+            if tag:
+                tags[desired_tag] = tag
+    return tags
+
+
+def _transcode_file(basedir, source_filename):
+    """Copy the given file to the destination directory, decoding and
+    re-encoding as an mp3, if necessary.
+    """
+
+    # TODO: Allow user to specify destination directory?
+    destdir = '.'
+    root, ext = os.path.splitext(source_filename)
+
+    # Determine destination filename.
+    destination_filename = root.replace(basedir, destdir) + '.mp3'
+
+    # Strip characters not allowed on vfat filesystems from the destination
+    # filename.
+    fstype = _get_filesystem_type(destination_filename)
+    if fstype == 'vfat':
+        destination_filename = re.sub('[?*":]', '_', destination_filename)
+
+    # If destination file already exists, do nothing.
+    if os.path.isfile(destination_filename):
+        return
+
+    # Create destination directory.
+    _makedirs_if_not_exist(os.path.dirname(destination_filename))
+
+    if ext == '.mp3':
+        # File is already an mp3. Just copy it to the destination directory.
+        shutil.copy2(source_filename, destination_filename)
+        return
+
+    # Read tags.
+    tags = _read_tags(source_filename)
+
+    # If we have date but not year, then set year based on date.
+    if not 'year' in tags and 'date' in tags:
+        tags['year'] = tags['date'][:4]
+
+    if ext not in ['.flac', '.m4a', '.ogg']:
+        # Unknown file type. Skip it.
+        sys.stderr.write('Skipping file of unknown type: %s\n' % source_filename)
+        return
+
+    # Build the decode command. Prints decoded output to stdout. Prints only
+    # error messages to stderr.
+    decode_cmd = ['avconv', '-loglevel', 'error', '-i', source_filename, '-f', 'wav', '-']
+
+    # Build encode command.
+    encode_cmd = ['lame', '-V', '2', '--quiet']
+    if 'album' in tags:
+        encode_cmd.extend(['--tl', tags['album']])
+    if 'artist' in tags:
+        encode_cmd.extend(['--ta', tags['artist']])
+    if 'discnumber' in tags:
+        encode_cmd.extend(['--tv', 'TPOS=%s' % tags['discnumber']])
+    if 'title' in tags:
+        encode_cmd.extend(['--tt', tags['title']])
+    if 'tracknumber' in tags:
+        encode_cmd.extend(['--tn', tags['tracknumber']])
+    if 'year' in tags:
+        encode_cmd.extend(['--ty', tags['year']])
+    encode_cmd.append('-') # Encode data from stdin.
+    encode_cmd.append(destination_filename)
+
+    # Pipe stdout from decoder to mp3 encoder.
+    decode_proc = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE)
+    try:
+        encode_proc = subprocess.Popen(
+                encode_cmd, stdin=decode_proc.stdout, stdout=subprocess.PIPE)
+    except OSError as exc:
+        sys.stderr.write('Could not run %s while trying to encode %s: %s\n' % (encode_cmd, source_filename, exc))
+        return
+
+    decode_proc.stdout.close() # Allow p1 to receive a SIGPIPE if p2 exits.
+    decode_proc.wait()
+    encode_proc.wait()
+
+    # Check return codes.
+    if decode_proc.returncode != 0 or encode_proc.returncode != 0:
+        sys.stderr.write('Error: Could not transcode %s\n' % source_filename)
+        if os.path.exists(destination_filename):
+            os.remove(destination_filename)
+
+
+class WorkerThread(threading.Thread):
+    """A thread that pops items off the given queue and transcodes
+    them one at a time.
+
+    Exits when the queue is empty.
+    """
+
+    def __init__(self, basedir, files_to_be_transcoded):
+        threading.Thread.__init__(self)
+        self.basedir = basedir
+        self.files_to_be_transcoded = files_to_be_transcoded
+
+    def run(self):
+        while True:
+            try:
+                path = self.files_to_be_transcoded.get_nowait()
+                _transcode_file(self.basedir, path)
+                self.files_to_be_transcoded.task_done()
+            except Queue.Empty:
+                # No more files to transcode therefore no more work for this
+                # thread, so stop looping.
+                break
+
+
+def _transcode_paths(basedir, paths):
+    """Iterates over the list of paths and transcodes or copies files using
+    a thread pool.
+
+    Directories will be walked and all files will be transcoded or copies,
+    as appropriate.
+    """
+    files_to_be_transcoded = Queue.Queue()
+
+    # Loop through all given arguments and add to queue.
+    for path in paths:
+        path = path.decode('utf-8')
+        if os.path.isfile(path):
+            files_to_be_transcoded.put(path)
+        elif os.path.isdir(path):
+            # Walk the directory.
+            for dirpath, _, filenames in os.walk(path):
+                for filename in filenames:
+                    # Transcode each file.
+                    files_to_be_transcoded.put(os.path.join(dirpath, filename))
+        else:
+            print('Error: Unknown file \'%s\'' % path)
+
+    num_cores = multiprocessing.cpu_count()
+
+    # Start workers threads.
+    worker_threads = []
+    for _ in xrange(0, min(files_to_be_transcoded.qsize(), num_cores * 2)):
+        worker_thread = WorkerThread(basedir, files_to_be_transcoded)
+        worker_thread.start()
+        worker_threads.append(worker_thread)
+
+    # Wait for worker threads to finish.
+    for worker_thread in worker_threads:
+        worker_thread.join()
+
+
+def _main(args):
+    """The main entry point for this script."""
+
+    # Show usage if no arguments were given on the command line.
+    if len(args) < 3:
+        print('Usage: %s <base directory> <file or directory of files> ...\n'
+                '    base directory -- The shared ancestor directory of all given files.\n'
+                '                      Needed in order to replicate the file hierarchy.'
+                % os.path.basename(sys.argv[0]))
+        sys.exit(1)
+
+    basedir = sys.argv[1]
+    paths = sys.argv[2:]
+
+    # Normalize paths.
+    basedir = os.path.abspath(basedir)
+    paths = [os.path.abspath(path) for path in paths]
+
+    # Remove duplicate paths.
+    paths = set(paths)
+
+    # Make sure basedir exists.
+    if not os.path.isdir(basedir):
+        sys.stderr.write('Error: %s is not a directory.\n' % basedir)
+        sys.exit(1)
+
+    # Make sure all given paths exist and are children of basedir.
+    for path in paths:
+        if not os.path.exists(path):
+            sys.stderr.write('Error: %s does not exist.\n' % path)
+            sys.exit(1)
+        if not path.startswith(basedir):
+            sys.stderr.write('Error: %s is not a subdirectory of %s\n' % (path, basedir))
+            sys.exit(1)
+
+    # Transcode all paths.
+    _transcode_paths(basedir, paths)
+
+
+if __name__ == '__main__':
+    try:
+        _main(sys.argv)
+    except KeyboardInterrupt:
+        pass

@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 
 """
 A command line program that looks for music files in path(s) given on
@@ -10,7 +10,7 @@ Available at https://github.com/markdoliner/transcode_to_mp3
 Licensed as follows (this is the 2-clause BSD license, aka
 "Simplified BSD License" or "FreeBSD License"):
 
-Copyright (c) 2014, Mark Doliner
+Copyright (c) 2014, 2023, Mark Doliner
 All rights reserved.
 
 Redistribution and use in source and binary forms, with or without
@@ -38,7 +38,7 @@ import errno
 import multiprocessing
 import os
 import os.path
-import Queue
+import queue
 import re
 import shutil
 import subprocess
@@ -49,14 +49,14 @@ try:
     import mutagen
 except ImportError:
     sys.stderr.write('Error: Could not import mutagen\n'
-            'On Ubuntu: apt-get install python-mutagen\n')
+            'On Ubuntu: apt-get install python3-mutagen\n')
     sys.exit(1)
 
 try:
     import psutil
 except ImportError:
     sys.stderr.write('Error: Could not import psutil\n'
-            'On Ubuntu: apt-get install python-psutil\n')
+            'On Ubuntu: apt-get install python3-psutil\n')
     sys.exit(1)
 
 
@@ -142,7 +142,7 @@ def _transcode_file(basedir, source_filename):
     # filename.
     fstype = _get_filesystem_type(destination_filename)
     if fstype == 'vfat':
-        destination_filename = re.sub('[?*":]', '_', destination_filename)
+        destination_filename = re.sub('[\?\*"\:]', '_', destination_filename)
 
     # If destination file already exists, do nothing.
     if os.path.isfile(destination_filename):
@@ -170,7 +170,7 @@ def _transcode_file(basedir, source_filename):
 
     # Build the decode command. Prints decoded output to stdout. Prints only
     # error messages to stderr.
-    decode_cmd = ['avconv', '-loglevel', 'error', '-i', source_filename, '-f', 'wav', '-']
+    decode_cmd = ['ffmpeg', '-loglevel', 'error', '-i', source_filename, '-f', 'wav', '-']
 
     # Build encode command.
     encode_cmd = ['lame', '-V', '2', '--quiet']
@@ -227,7 +227,7 @@ class WorkerThread(threading.Thread):
                 path = self.files_to_be_transcoded.get_nowait()
                 _transcode_file(self.basedir, path)
                 self.files_to_be_transcoded.task_done()
-            except Queue.Empty:
+            except queue.Empty:
                 # No more files to transcode therefore no more work for this
                 # thread, so stop looping.
                 break
@@ -240,11 +240,10 @@ def _transcode_paths(basedir, paths):
     Directories will be walked and all files will be transcoded or copies,
     as appropriate.
     """
-    files_to_be_transcoded = Queue.Queue()
+    files_to_be_transcoded = queue.Queue()
 
     # Loop through all given arguments and add to queue.
     for path in paths:
-        path = path.decode('utf-8')
         if os.path.isfile(path):
             files_to_be_transcoded.put(path)
         elif os.path.isdir(path):
@@ -258,9 +257,9 @@ def _transcode_paths(basedir, paths):
 
     num_cores = multiprocessing.cpu_count()
 
-    # Start workers threads.
+    # Start worker threads.
     worker_threads = []
-    for _ in xrange(0, min(files_to_be_transcoded.qsize(), num_cores * 2)):
+    for _ in range(0, min(files_to_be_transcoded.qsize(), num_cores * 2)):
         worker_thread = WorkerThread(basedir, files_to_be_transcoded)
         worker_thread.start()
         worker_threads.append(worker_thread)

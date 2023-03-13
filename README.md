@@ -2,7 +2,7 @@ Overview
 ========
 A simple command line python script that transcodes a list of files from a
 few different audio encodings to mp3. Useful when you have FLAC files that
-you want to play in iTunes or anything else that doesn't support FLAC.
+you want to play in Apple Music or anything else that doesn't support FLAC.
 
 Files are written to the local directory in a file hierarchy that mirrors
 the source file hierarchy.

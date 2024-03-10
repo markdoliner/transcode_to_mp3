@@ -183,6 +183,7 @@ def _transcode_file(basedir: str, source_filename: str) -> None:
         "ffmpeg",
         "-loglevel",
         "error",
+        "-nostdin",
         "-i",
         source_filename,
         "-f",
@@ -207,8 +208,10 @@ def _transcode_file(basedir: str, source_filename: str) -> None:
     encode_cmd.append("-")  # Encode data from stdin.
     encode_cmd.append(destination_filename)
 
-    # Pipe stdout from decoder to mp3 encoder.
+    # Execute the decoder.
     decode_proc = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE)
+
+    # Execute the encoder. The decoder's output is piped to the encoder's input.
     try:
         encode_proc = subprocess.Popen(
             encode_cmd, stdin=decode_proc.stdout, stdout=subprocess.PIPE

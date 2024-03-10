@@ -44,6 +44,7 @@ import shutil
 import subprocess
 import sys
 import threading
+from typing import TYPE_CHECKING
 
 try:
     import mutagen
@@ -56,6 +57,9 @@ except ImportError:
 
 try:
     import psutil
+
+    if TYPE_CHECKING:
+        from psutil._common import sdiskpart
 except ImportError:
     sys.stderr.write(
         "Error: Could not import psutil\n" "On Ubuntu: apt-get install python3-psutil\n"
@@ -74,7 +78,7 @@ _DESIRED_TAGS = [
 ]
 
 
-def _get_filesystem_type(path):
+def _get_filesystem_type(path: str) -> str:
     """Return a short string describing the name of the filesystem type where
     the given path lives.
 
@@ -82,7 +86,7 @@ def _get_filesystem_type(path):
     e.x.: ext4
     """
     path = os.path.abspath(path)
-    matches = []
+    matches: list[sdiskpart] = []
 
     # Iterate through all partitions and keep track of potential matches.
     for partition in psutil.disk_partitions():
@@ -96,7 +100,7 @@ def _get_filesystem_type(path):
     return longest_matched_partition.fstype
 
 
-def _makedirs_if_not_exist(path):
+def _makedirs_if_not_exist(path: str) -> None:
     """Recursively create a given directory if it does not exist."""
     try:
         os.makedirs(path)
@@ -107,7 +111,7 @@ def _makedirs_if_not_exist(path):
             raise
 
 
-def _read_tags(source_filename):
+def _read_tags(source_filename: str) -> dict[str, str]:
     """Return a dict containing any non-null tags out of the list of
     _DESIRED_TAGS from the given file.
 
@@ -122,7 +126,7 @@ def _read_tags(source_filename):
         return {}
 
     # Copy desired tags from file_info to tags.
-    tags = {}
+    tags: dict[str, str] = {}
     for desired_tag in _DESIRED_TAGS:
         if desired_tag in file_info:
             tag = file_info[desired_tag][0]
@@ -131,7 +135,7 @@ def _read_tags(source_filename):
     return tags
 
 
-def _transcode_file(basedir, source_filename):
+def _transcode_file(basedir: str, source_filename: str) -> None:
     """Copy the given file to the destination directory, decoding and
     re-encoding as an mp3, if necessary.
     """
@@ -234,12 +238,12 @@ class WorkerThread(threading.Thread):
     Exits when the queue is empty.
     """
 
-    def __init__(self, basedir, files_to_be_transcoded):
+    def __init__(self, basedir: str, files_to_be_transcoded: queue.Queue[str]) -> None:
         threading.Thread.__init__(self)
         self.basedir = basedir
         self.files_to_be_transcoded = files_to_be_transcoded
 
-    def run(self):
+    def run(self) -> None:
         while True:
             try:
                 path = self.files_to_be_transcoded.get_nowait()
@@ -251,16 +255,16 @@ class WorkerThread(threading.Thread):
                 break
 
 
-def _transcode_paths(basedir, paths):
+def _transcode_paths(basedir: str, paths: set[str]) -> None:
     """Iterates over the list of paths and transcodes or copies files using
     a thread pool.
 
-    Directories will be walked and all files will be transcoded or copies,
+    Directories will be walked and all files will be transcoded or copied,
     as appropriate.
     """
-    files_to_be_transcoded = queue.Queue()
+    files_to_be_transcoded = queue.Queue[str]()
 
-    # Loop through all given arguments and add to queue.
+    # Loop through paths, walk directories, and add individual files to the queue.
     for path in paths:
         if os.path.isfile(path):
             files_to_be_transcoded.put(path)
@@ -276,7 +280,7 @@ def _transcode_paths(basedir, paths):
     num_cores = multiprocessing.cpu_count()
 
     # Start worker threads.
-    worker_threads = []
+    worker_threads: list[WorkerThread] = []
     for _ in range(0, min(files_to_be_transcoded.qsize(), num_cores * 2)):
         worker_thread = WorkerThread(basedir, files_to_be_transcoded)
         worker_thread.start()
@@ -287,7 +291,7 @@ def _transcode_paths(basedir, paths):
         worker_thread.join()
 
 
-def _main(args):
+def _main(args: list[str]) -> None:
     """The main entry point for this script."""
 
     # Show usage if no arguments were given on the command line.

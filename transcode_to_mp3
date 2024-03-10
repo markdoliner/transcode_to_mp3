@@ -151,7 +151,7 @@ def _transcode_file(basedir: str, source_filename: str) -> None:
     # filename.
     fstype = _get_filesystem_type(destination_filename)
     if fstype == "vfat":
-        destination_filename = re.sub('[\?\*"\:]', "_", destination_filename)
+        destination_filename = re.sub(r'[\?\*"\:]', "_", destination_filename)
 
     # If destination file already exists, do nothing.
     if os.path.isfile(destination_filename):
@@ -169,7 +169,7 @@ def _transcode_file(basedir: str, source_filename: str) -> None:
     tags = _read_tags(source_filename)
 
     # If we have date but not year, then set year based on date.
-    if not "year" in tags and "date" in tags:
+    if "year" not in tags and "date" in tags:
         tags["year"] = tags["date"][:4]
 
     if ext not in [".flac", ".m4a", ".ogg"]:

@@ -48,26 +48,29 @@ import threading
 try:
     import mutagen
 except ImportError:
-    sys.stderr.write('Error: Could not import mutagen\n'
-            'On Ubuntu: apt-get install python3-mutagen\n')
+    sys.stderr.write(
+        "Error: Could not import mutagen\n"
+        "On Ubuntu: apt-get install python3-mutagen\n"
+    )
     sys.exit(1)
 
 try:
     import psutil
 except ImportError:
-    sys.stderr.write('Error: Could not import psutil\n'
-            'On Ubuntu: apt-get install python3-psutil\n')
+    sys.stderr.write(
+        "Error: Could not import psutil\n" "On Ubuntu: apt-get install python3-psutil\n"
+    )
     sys.exit(1)
 
 
 _DESIRED_TAGS = [
-    'album',
-    'artist',
-    'date',
-    'discnumber',
-    'performer',
-    'title',
-    'tracknumber'
+    "album",
+    "artist",
+    "date",
+    "discnumber",
+    "performer",
+    "title",
+    "tracknumber",
 ]
 
 
@@ -87,7 +90,9 @@ def _get_filesystem_type(path):
             matches.append(partition)
 
     # Return whichever patition has the deepest mount point.
-    longest_matched_partition = max(matches, key=lambda partition: len(partition.mountpoint))
+    longest_matched_partition = max(
+        matches, key=lambda partition: len(partition.mountpoint)
+    )
     return longest_matched_partition.fstype
 
 
@@ -111,7 +116,7 @@ def _read_tags(source_filename):
     try:
         file_info = mutagen.File(source_filename, easy=True)
     except mutagen.mp3.HeaderNotFoundError as exc:
-        print('Could not find mp3 header in %s: %s' % (source_filename, exc))
+        print("Could not find mp3 header in %s: %s" % (source_filename, exc))
         return {}
     if not file_info:
         return {}
@@ -132,17 +137,17 @@ def _transcode_file(basedir, source_filename):
     """
 
     # TODO: Allow user to specify destination directory?
-    destdir = '.'
+    destdir = "."
     root, ext = os.path.splitext(source_filename)
 
     # Determine destination filename.
-    destination_filename = root.replace(basedir, destdir) + '.mp3'
+    destination_filename = root.replace(basedir, destdir) + ".mp3"
 
     # Strip characters not allowed on vfat filesystems from the destination
     # filename.
     fstype = _get_filesystem_type(destination_filename)
-    if fstype == 'vfat':
-        destination_filename = re.sub('[\?\*"\:]', '_', destination_filename)
+    if fstype == "vfat":
+        destination_filename = re.sub('[\?\*"\:]', "_", destination_filename)
 
     # If destination file already exists, do nothing.
     if os.path.isfile(destination_filename):
@@ -151,7 +156,7 @@ def _transcode_file(basedir, source_filename):
     # Create destination directory.
     _makedirs_if_not_exist(os.path.dirname(destination_filename))
 
-    if ext == '.mp3':
+    if ext == ".mp3":
         # File is already an mp3. Just copy it to the destination directory.
         shutil.copy2(source_filename, destination_filename)
         return
@@ -160,51 +165,64 @@ def _transcode_file(basedir, source_filename):
     tags = _read_tags(source_filename)
 
     # If we have date but not year, then set year based on date.
-    if not 'year' in tags and 'date' in tags:
-        tags['year'] = tags['date'][:4]
+    if not "year" in tags and "date" in tags:
+        tags["year"] = tags["date"][:4]
 
-    if ext not in ['.flac', '.m4a', '.ogg']:
+    if ext not in [".flac", ".m4a", ".ogg"]:
         # Unknown file type. Skip it.
-        sys.stderr.write('Skipping file of unknown type: %s\n' % source_filename)
+        sys.stderr.write("Skipping file of unknown type: %s\n" % source_filename)
         return
 
     # Build the decode command. Prints decoded output to stdout. Prints only
     # error messages to stderr.
-    decode_cmd = ['ffmpeg', '-loglevel', 'error', '-i', source_filename, '-f', 'wav', '-']
+    decode_cmd = [
+        "ffmpeg",
+        "-loglevel",
+        "error",
+        "-i",
+        source_filename,
+        "-f",
+        "wav",
+        "-",
+    ]
 
     # Build encode command.
-    encode_cmd = ['lame', '-V', '2', '--quiet']
-    if 'album' in tags:
-        encode_cmd.extend(['--tl', tags['album']])
-    if 'artist' in tags:
-        encode_cmd.extend(['--ta', tags['artist']])
-    if 'discnumber' in tags:
-        encode_cmd.extend(['--tv', 'TPOS=%s' % tags['discnumber']])
-    if 'title' in tags:
-        encode_cmd.extend(['--tt', tags['title']])
-    if 'tracknumber' in tags:
-        encode_cmd.extend(['--tn', tags['tracknumber']])
-    if 'year' in tags:
-        encode_cmd.extend(['--ty', tags['year']])
-    encode_cmd.append('-') # Encode data from stdin.
+    encode_cmd = ["lame", "-V", "2", "--quiet"]
+    if "album" in tags:
+        encode_cmd.extend(["--tl", tags["album"]])
+    if "artist" in tags:
+        encode_cmd.extend(["--ta", tags["artist"]])
+    if "discnumber" in tags:
+        encode_cmd.extend(["--tv", "TPOS=%s" % tags["discnumber"]])
+    if "title" in tags:
+        encode_cmd.extend(["--tt", tags["title"]])
+    if "tracknumber" in tags:
+        encode_cmd.extend(["--tn", tags["tracknumber"]])
+    if "year" in tags:
+        encode_cmd.extend(["--ty", tags["year"]])
+    encode_cmd.append("-")  # Encode data from stdin.
     encode_cmd.append(destination_filename)
 
     # Pipe stdout from decoder to mp3 encoder.
     decode_proc = subprocess.Popen(decode_cmd, stdout=subprocess.PIPE)
     try:
         encode_proc = subprocess.Popen(
-                encode_cmd, stdin=decode_proc.stdout, stdout=subprocess.PIPE)
+            encode_cmd, stdin=decode_proc.stdout, stdout=subprocess.PIPE
+        )
     except OSError as exc:
-        sys.stderr.write('Could not run %s while trying to encode %s: %s\n' % (encode_cmd, source_filename, exc))
+        sys.stderr.write(
+            "Could not run %s while trying to encode %s: %s\n"
+            % (encode_cmd, source_filename, exc)
+        )
         return
 
-    decode_proc.stdout.close() # Allow p1 to receive a SIGPIPE if p2 exits.
+    decode_proc.stdout.close()  # Allow p1 to receive a SIGPIPE if p2 exits.
     decode_proc.wait()
     encode_proc.wait()
 
     # Check return codes.
     if decode_proc.returncode != 0 or encode_proc.returncode != 0:
-        sys.stderr.write('Error: Could not transcode %s\n' % source_filename)
+        sys.stderr.write("Error: Could not transcode %s\n" % source_filename)
         if os.path.exists(destination_filename):
             os.remove(destination_filename)
 
@@ -253,7 +271,7 @@ def _transcode_paths(basedir, paths):
                     # Transcode each file.
                     files_to_be_transcoded.put(os.path.join(dirpath, filename))
         else:
-            print('Error: Unknown file \'%s\'' % path)
+            print("Error: Unknown file '%s'" % path)
 
     num_cores = multiprocessing.cpu_count()
 
@@ -274,10 +292,12 @@ def _main(args):
 
     # Show usage if no arguments were given on the command line.
     if len(args) < 3:
-        print('Usage: %s <base directory> <file or directory of files> ...\n'
-                '    base directory -- The shared ancestor directory of all given files.\n'
-                '                      Needed in order to replicate the file hierarchy.'
-                % os.path.basename(sys.argv[0]))
+        print(
+            "Usage: %s <base directory> <file or directory of files> ...\n"
+            "    base directory -- The shared ancestor directory of all given files.\n"
+            "                      Needed in order to replicate the file hierarchy."
+            % os.path.basename(sys.argv[0])
+        )
         sys.exit(1)
 
     basedir = sys.argv[1]
@@ -292,23 +312,25 @@ def _main(args):
 
     # Make sure basedir exists.
     if not os.path.isdir(basedir):
-        sys.stderr.write('Error: %s is not a directory.\n' % basedir)
+        sys.stderr.write("Error: %s is not a directory.\n" % basedir)
         sys.exit(1)
 
     # Make sure all given paths exist and are children of basedir.
     for path in paths:
         if not os.path.exists(path):
-            sys.stderr.write('Error: %s does not exist.\n' % path)
+            sys.stderr.write("Error: %s does not exist.\n" % path)
             sys.exit(1)
         if not path.startswith(basedir):
-            sys.stderr.write('Error: %s is not a subdirectory of %s\n' % (path, basedir))
+            sys.stderr.write(
+                "Error: %s is not a subdirectory of %s\n" % (path, basedir)
+            )
             sys.exit(1)
 
     # Transcode all paths.
     _transcode_paths(basedir, paths)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     try:
         _main(sys.argv)
     except KeyboardInterrupt:
